@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const prisma_1 = require("../lib/prisma");
+const errorHandler_1 = require("../utils/errorHandler");
 const router = (0, express_1.Router)();
 // Obter dados do perfil do usuário
 router.get('/', auth_1.authMiddleware, async (req, res) => {
@@ -31,7 +32,8 @@ router.get('/', auth_1.authMiddleware, async (req, res) => {
         res.json(user);
     }
     catch (error) {
-        res.status(500).json({ error: error.message });
+        (0, errorHandler_1.logError)(error, 'Get Profile');
+        res.status(500).json({ error: (0, errorHandler_1.sanitizeError)(error) });
     }
 });
 // Cancelar assinatura (agora via Stripe)
@@ -53,7 +55,8 @@ router.post('/cancel-subscription', auth_1.authMiddleware, async (req, res) => {
         });
     }
     catch (error) {
-        res.status(500).json({ error: error.message });
+        (0, errorHandler_1.logError)(error, 'Cancel Subscription');
+        res.status(500).json({ error: (0, errorHandler_1.sanitizeError)(error) });
     }
 });
 // Excluir conta permanentemente
@@ -85,7 +88,8 @@ router.delete('/delete-account', auth_1.authMiddleware, async (req, res) => {
         res.json({ message: 'Conta excluída com sucesso' });
     }
     catch (error) {
-        res.status(500).json({ error: error.message });
+        (0, errorHandler_1.logError)(error, 'Delete Account');
+        res.status(500).json({ error: (0, errorHandler_1.sanitizeError)(error) });
     }
 });
 exports.default = router;

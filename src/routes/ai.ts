@@ -3,6 +3,7 @@ import { AuthRequest } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { generateWhatsAppMessage } from '../services/geminiService';
 import { z } from 'zod';
+import { sanitizeError, logError } from '../utils/errorHandler';
 
 const router = Router();
 
@@ -27,7 +28,8 @@ router.post('/generate-message', authMiddleware, async (req: AuthRequest, res: R
       });
     }
 
-    res.status(500).json({ error: error.message || 'Erro ao gerar mensagem' });
+    logError(error, 'Generate Message');
+    res.status(500).json({ error: sanitizeError(error) });
   }
 });
 

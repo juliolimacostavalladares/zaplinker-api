@@ -23,6 +23,7 @@ import {
   validateAndSanitizePhone,
   sanitizeUrl,
 } from "./utils/sanitize";
+import { sanitizeError, logError } from "./utils/errorHandler";
 import { prisma } from "./lib/prisma";
 
 dotenv.config();
@@ -57,7 +58,7 @@ const createLimiter = rateLimit({
 
 const redirectLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 100,
+  max: 50,
   skipSuccessfulRequests: false,
   message: "Muitos cliques, aguarde um momento",
 });
@@ -107,7 +108,8 @@ app.get(
 
       res.json(links);
     } catch (error: any) {
-      res.status(500).json({ error: error.message });
+      logError(error, 'Get Links');
+      res.status(500).json({ error: sanitizeError(error) });
     }
   },
 );
@@ -223,8 +225,8 @@ app.post(
 
       res.status(201).json(link);
     } catch (error: any) {
-      console.error("Erro ao criar link:", error);
-      res.status(400).json({ error: error.message });
+      logError(error, 'Create Link');
+      res.status(400).json({ error: sanitizeError(error) });
     }
   },
 );
@@ -275,13 +277,15 @@ app.get("/r/:slug", redirectLimiter, async (req: Request, res: Response) => {
     // Se for Bio, redireciona para a página de preview do front-end
     return res.redirect(`${process.env.FRONTEND_URL}/bio/${slug}`);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    logError(error, 'Redirect');
+    res.status(500).json({ error: sanitizeError(error) });
   }
 });
 
 // Reativar atendentes desabilitados (quando faz upgrade)
 app.post(
   "/api/links/:linkId/reactivate-agents",
+  doubleCsrfProtection,
   authMiddleware,
   async (req: AuthRequest, res: Response) => {
     try {
@@ -352,7 +356,8 @@ app.post(
         reactivated: availableSlots,
       });
     } catch (error: any) {
-      res.status(500).json({ error: error.message });
+      logError(error, 'Reactivate Agents');
+      res.status(500).json({ error: sanitizeError(error) });
     }
   },
 );

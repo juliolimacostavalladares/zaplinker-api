@@ -9,6 +9,7 @@ const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const zod_1 = require("zod");
 const sanitize_1 = require("../utils/sanitize");
 const prisma_1 = require("../lib/prisma");
+const errorHandler_1 = require("../utils/errorHandler");
 const router = (0, express_1.Router)();
 // Schemas de validação
 const registerSchema = zod_1.z.object({
@@ -86,7 +87,8 @@ router.post('/register', async (req, res) => {
                 details: error.issues.map((e) => e.message)
             });
         }
-        res.status(500).json({ error: error.message });
+        (0, errorHandler_1.logError)(error, 'Register');
+        res.status(500).json({ error: (0, errorHandler_1.sanitizeError)(error) });
     }
 });
 // Login
@@ -132,7 +134,8 @@ router.post('/login', async (req, res) => {
                 details: error.issues.map((e) => e.message)
             });
         }
-        res.status(500).json({ error: error.message });
+        (0, errorHandler_1.logError)(error, 'Login');
+        res.status(500).json({ error: (0, errorHandler_1.sanitizeError)(error) });
     }
 });
 exports.default = router;
