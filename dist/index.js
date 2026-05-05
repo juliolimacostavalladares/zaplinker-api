@@ -18,6 +18,7 @@ const auth_2 = require("./middleware/auth");
 const planLimits_1 = require("./middleware/planLimits");
 const csrf_1 = require("./middleware/csrf");
 const sanitize_1 = require("./utils/sanitize");
+const errorHandler_1 = require("./utils/errorHandler");
 const prisma_1 = require("./lib/prisma");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
@@ -28,7 +29,7 @@ app.use((0, cors_1.default)({
     origin: process.env.FRONTEND_URL || "http://localhost:3000",
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-csrf-token"],
 }));
 // Rate limiting
 const authLimiter = (0, express_rate_limit_1.default)({
@@ -43,7 +44,7 @@ const createLimiter = (0, express_rate_limit_1.default)({
 });
 const redirectLimiter = (0, express_rate_limit_1.default)({
     windowMs: 60 * 1000,
-    max: 100,
+    max: 50,
     skipSuccessfulRequests: false,
     message: "Muitos cliques, aguarde um momento",
 });
@@ -84,7 +85,8 @@ app.get("/api/links", auth_2.authMiddleware, async (req, res) => {
         res.json(links);
     }
     catch (error) {
-        res.status(500).json({ error: error.message });
+        (0, errorHandler_1.logError)(error, 'Get Links');
+        res.status(500).json({ error: (0, errorHandler_1.sanitizeError)(error) });
     }
 });
 // Criar novo link
@@ -173,8 +175,8 @@ app.post("/api/links", csrf_1.doubleCsrfProtection, auth_2.authMiddleware, creat
         res.status(201).json(link);
     }
     catch (error) {
-        console.error("Erro ao criar link:", error);
-        res.status(400).json({ error: error.message });
+        (0, errorHandler_1.logError)(error, 'Create Link');
+        res.status(400).json({ error: (0, errorHandler_1.sanitizeError)(error) });
     }
 });
 // --- MOTOR DE REDIRECIONAMENTO (ROUND ROBIN) ---
@@ -216,11 +218,12 @@ app.get("/r/:slug", redirectLimiter, async (req, res) => {
         return res.redirect(`${process.env.FRONTEND_URL}/bio/${slug}`);
     }
     catch (error) {
-        res.status(500).json({ error: error.message });
+        (0, errorHandler_1.logError)(error, 'Redirect');
+        res.status(500).json({ error: (0, errorHandler_1.sanitizeError)(error) });
     }
 });
 // Reativar atendentes desabilitados (quando faz upgrade)
-app.post("/api/links/:linkId/reactivate-agents", auth_2.authMiddleware, async (req, res) => {
+app.post("/api/links/:linkId/reactivate-agents", csrf_1.doubleCsrfProtection, auth_2.authMiddleware, async (req, res) => {
     try {
         const { linkId } = req.params;
         // Verificar se o link pertence ao usuário
@@ -279,7 +282,8 @@ app.post("/api/links/:linkId/reactivate-agents", auth_2.authMiddleware, async (r
         });
     }
     catch (error) {
-        res.status(500).json({ error: error.message });
+        (0, errorHandler_1.logError)(error, 'Reactivate Agents');
+        res.status(500).json({ error: (0, errorHandler_1.sanitizeError)(error) });
     }
 });
 const PORT = process.env.PORT || 3001;

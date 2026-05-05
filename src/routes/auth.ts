@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { sanitizeString, validateAndSanitizeEmail } from '../utils/sanitize';
 import { prisma } from '../lib/prisma';
+import { sanitizeError, logError } from '../utils/errorHandler';
 
 const router = Router();
 
@@ -94,7 +95,8 @@ router.post('/register', async (req: Request, res: Response) => {
         details: error.issues.map((e: any) => e.message)
       });
     }
-    res.status(500).json({ error: error.message });
+    logError(error, 'Register');
+    res.status(500).json({ error: sanitizeError(error) });
   }
 });
 
@@ -148,7 +150,8 @@ router.post('/login', async (req: Request, res: Response) => {
         details: error.issues.map((e: any) => e.message)
       });
     }
-    res.status(500).json({ error: error.message });
+    logError(error, 'Login');
+    res.status(500).json({ error: sanitizeError(error) });
   }
 });
 

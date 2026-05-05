@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { AuthRequest } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { prisma } from '../lib/prisma';
+import { sanitizeError, logError } from '../utils/errorHandler';
 
 const router = Router();
 
@@ -33,7 +34,8 @@ router.get('/', authMiddleware, async (req: AuthRequest, res: Response) => {
 
     res.json(user);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    logError(error, 'Get Profile');
+    res.status(500).json({ error: sanitizeError(error) });
   }
 });
 
@@ -58,7 +60,8 @@ router.post('/cancel-subscription', authMiddleware, async (req: AuthRequest, res
       error: 'Use o endpoint /api/payments/cancel-subscription para cancelar via Stripe'
     });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    logError(error, 'Cancel Subscription');
+    res.status(500).json({ error: sanitizeError(error) });
   }
 });
 
@@ -95,7 +98,8 @@ router.delete('/delete-account', authMiddleware, async (req: AuthRequest, res: R
 
     res.json({ message: 'Conta excluída com sucesso' });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    logError(error, 'Delete Account');
+    res.status(500).json({ error: sanitizeError(error) });
   }
 });
 

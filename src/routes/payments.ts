@@ -1,8 +1,9 @@
 import { Router, Response } from 'express';
 import Stripe from 'stripe';
-import { createClient } from '@supabase/supabase-js';
 import { AuthRequest } from '../types';
 import { authMiddleware } from '../middleware/auth';
+import { sanitizeError, logError } from '../utils/errorHandler';
+import { prisma } from '../lib/prisma';
 
 const router = Router();
 
@@ -10,24 +11,17 @@ const getStripe = () => new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-12-15.clover',
 });
 
-const getSupabase = () => createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_KEY!
-);
-
 // Listar planos disponíveis
 router.get('/plans', async (req, res) => {
   try {
-    const supabase = getSupabase();
-    const { data: plans, error } = await supabase
-      .from('subscription_plans')
-      .select('*')
-      .order('price', { ascending: true });
+    const plans = await prisma.subscriptionPlan.findMany({
+      orderBy: { price: 'asc' }
+    });
 
-    if (error) throw error;
     res.json(plans);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    logError(error, 'Get Plans');
+    res.status(500).json({ error: sanitizeError(error) });
   }
 });
 
@@ -35,43 +29,34 @@ router.get('/plans', async (req, res) => {
 router.post('/create-checkout-session', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const { planId } = req.body;
-    const supabase = getSupabase();
     const stripe = getStripe();
-
-    console.log('\n=== CREATING CHECKOUT SESSION ===');
-    console.log('User ID:', req.user!.id);
-    console.log('Requested plan:', planId);
 
     // Sanitizar input para prevenir SQL injection
     const sanitizedPlanId = planId.replace(/[%_\\]/g, '\\$&');
 
-    // Buscar dados do plano (case insensitive)
-    const { data: plan, error: planError } = await supabase
-      .from('subscription_plans')
-      .select('*')
-      .ilike('name', sanitizedPlanId)
-      .single();
+    // Buscar dados do plano
+    const plan = await prisma.subscriptionPlan.findFirst({
+      where: {
+        name: {
+          equals: sanitizedPlanId,
+          mode: 'insensitive'
+        }
+      }
+    });
 
-    if (planError || !plan) {
-      console.error('❌ Plan not found:', planId);
+    if (!plan) {
       return res.status(404).json({ error: 'Plano não encontrado' });
     }
 
-    console.log('✅ Plan found:', plan.name, '- R$', plan.price);
-
     // Buscar dados do usuário
-    const { data: user, error: userError } = await supabase
-      .from('users')
-      .select('email, name')
-      .eq('id', req.user!.id)
-      .single();
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.id },
+      select: { email: true, name: true }
+    });
 
-    if (userError || !user) {
-      console.error('❌ User not found');
+    if (!user) {
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
-
-    console.log('User email:', user.email);
 
     // Criar sessão de checkout
     const session = await stripe.checkout.sessions.create({
@@ -82,9 +67,9 @@ router.post('/create-checkout-session', authMiddleware, async (req: AuthRequest,
             currency: 'brl',
             product_data: {
               name: plan.name,
-              description: `${plan.max_links} links, ${plan.max_clicks_per_month} cliques/mês`,
+              description: `${plan.maxLinks} links, ${plan.maxClicksPerMonth} cliques/mês`,
             },
-            unit_amount: Math.round(plan.price * 100), // Stripe usa centavos
+            unit_amount: Math.round(Number(plan.price) * 100),
             recurring: {
               interval: 'month',
             },
@@ -98,15 +83,14 @@ router.post('/create-checkout-session', authMiddleware, async (req: AuthRequest,
       customer_email: user.email,
       metadata: {
         userId: req.user!.id,
-        planId: plan.id, // Usar o UUID do plano
+        planId: plan.id,
       },
     });
 
-    console.log('✅ Checkout session created:', session.id);
     res.json({ url: session.url });
   } catch (error: any) {
-    console.error('❌ Error creating checkout session:', error.message);
-    res.status(500).json({ error: error.message });
+    logError(error, 'Create Checkout Session');
+    res.status(500).json({ error: sanitizeError(error) });
   }
 });
 
@@ -119,392 +103,288 @@ router.post('/webhook', async (req, res: Response) => {
   try {
     event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET!);
   } catch (err: any) {
-    console.error('Webhook signature verification failed:', err.message);
-    return res.status(400).send(`Webhook signature verification failed: ${err.message}`);
+    logError(err, 'Webhook Signature Verification');
+    return res.status(400).send('Webhook signature verification failed');
   }
-
-  console.log('\n=== WEBHOOK RECEIVED ===');
-  console.log('Event Type:', event.type);
-  console.log('Event ID:', event.id);
-  console.log('Timestamp:', new Date().toISOString());
-  
-  const supabase = getSupabase();
 
   try {
     switch (event.type) {
       case 'checkout.session.completed':
         const session = event.data.object as Stripe.Checkout.Session;
         const { userId, planId } = session.metadata!;
-        console.log('\n--- CHECKOUT COMPLETED ---');
-        console.log('User ID:', userId);
-        console.log('Plan ID:', planId);
-        console.log('Customer ID:', session.customer);
-        console.log('Subscription ID:', session.subscription);
 
         // Atualizar usuário com nova assinatura
-        const { error: updateError } = await supabase
-          .from('users')
-          .update({
-            subscription_plan_id: planId,
-            subscription_status: 'active',
-            subscription_expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-            stripe_customer_id: session.customer as string,
-            stripe_subscription_id: session.subscription as string,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', userId);
-        
-        if (updateError) {
-          console.error('❌ Error updating user:', updateError);
-        } else {
-          console.log('✅ User subscription activated successfully');
-        }
+        await prisma.user.update({
+          where: { id: userId },
+          data: {
+            subscriptionPlanId: planId,
+            subscriptionStatus: 'active',
+            subscriptionExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+            stripeCustomerId: session.customer as string,
+            stripeSubscriptionId: session.subscription as string,
+          }
+        });
         break;
 
       case 'invoice.payment_succeeded':
         const invoice = event.data.object as Stripe.Invoice;
         const invoiceSubscription = (invoice as any).subscription;
-        console.log('\n--- INVOICE PAYMENT SUCCEEDED ---');
-        console.log('Subscription ID:', invoiceSubscription);
-        console.log('Amount Paid:', invoice.amount_paid / 100, invoice.currency.toUpperCase());
-        
+
         if (invoiceSubscription && typeof invoiceSubscription === 'string') {
-          const { error: renewError } = await supabase
-            .from('users')
-            .update({
-              subscription_status: 'active',
-              subscription_expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-              updated_at: new Date().toISOString()
-            })
-            .eq('stripe_subscription_id', invoiceSubscription);
-          
-          if (renewError) {
-            console.error('❌ Error renewing subscription:', renewError);
-          } else {
-            console.log('✅ Subscription renewed successfully');
-          }
+          await prisma.user.updateMany({
+            where: { stripeSubscriptionId: invoiceSubscription },
+            data: {
+              subscriptionStatus: 'active',
+              subscriptionExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+            }
+          });
         }
         break;
 
       case 'invoice.payment_failed':
         const failedInvoice = event.data.object as Stripe.Invoice;
         const failedInvoiceSubscription = (failedInvoice as any).subscription;
-        console.log('\n--- INVOICE PAYMENT FAILED ---');
-        console.log('Subscription ID:', failedInvoiceSubscription);
-        console.log('Amount Due:', failedInvoice.amount_due / 100, failedInvoice.currency.toUpperCase());
-        
+
         if (failedInvoiceSubscription && typeof failedInvoiceSubscription === 'string') {
-          const { error: failError } = await supabase
-            .from('users')
-            .update({
-              subscription_status: 'past_due',
-              updated_at: new Date().toISOString()
-            })
-            .eq('stripe_subscription_id', failedInvoiceSubscription);
-          
-          if (failError) {
-            console.error('❌ Error marking subscription as past_due:', failError);
-          } else {
-            console.log('⚠️ Subscription marked as past_due');
-          }
+          await prisma.user.updateMany({
+            where: { stripeSubscriptionId: failedInvoiceSubscription },
+            data: { subscriptionStatus: 'past_due' }
+          });
         }
         break;
 
       case 'customer.subscription.deleted':
       case 'customer.subscription.updated':
         const subscription = event.data.object as Stripe.Subscription;
-        console.log('\n--- SUBSCRIPTION EVENT ---');
-        console.log('Subscription ID:', subscription.id);
-        console.log('Status:', subscription.status);
-        console.log('Cancel at period end:', subscription.cancel_at_period_end);
-        console.log('Canceled at:', subscription.canceled_at ? new Date(subscription.canceled_at * 1000).toISOString() : 'N/A');
-        console.log('Current period end:', (subscription as any).current_period_end ? new Date((subscription as any).current_period_end * 1000).toISOString() : 'N/A');
-        
+
         // Buscar usuário antes de qualquer operação
-        const { data: currentUser, error: userFindError } = await supabase
-          .from('users')
-          .select('id, email, subscription_status')
-          .eq('stripe_subscription_id', subscription.id)
-          .single();
-        
-        if (userFindError) {
-          console.error('❌ User not found for subscription:', subscription.id);
-          console.error('Error:', userFindError);
+        const currentUser = await prisma.user.findFirst({
+          where: { stripeSubscriptionId: subscription.id },
+          select: { id: true, email: true, subscriptionStatus: true }
+        });
+
+        if (!currentUser) {
+          logError(new Error('User not found for subscription'), 'Webhook - Find User');
           break;
         }
-        
-        console.log('✅ User found:', currentUser.email, '(ID:', currentUser.id, ')');
-        
+
         // Verificar se a assinatura foi cancelada ou deletada
-        const isCancelled = 
+        const isCancelled =
           event.type === 'customer.subscription.deleted' ||
           subscription.status === 'canceled' ||
           subscription.canceled_at !== null;
-        
-        if (isCancelled) {
-          console.log('🔄 Processing subscription cancellation...');
-          console.log('Reason: Event type =', event.type, '| Status =', subscription.status, '| Canceled at =', subscription.canceled_at);
-          
-          // Buscar plano gratuito
-          const { data: freePlan, error: freePlanError } = await supabase
-            .from('subscription_plans')
-            .select('id, name')
-            .eq('name', 'Gratuito')
-            .single();
 
-          if (freePlanError || !freePlan) {
-            console.error('❌ Free plan not found:', freePlanError);
+        if (isCancelled) {
+          // Buscar plano gratuito
+          const freePlan = await prisma.subscriptionPlan.findUnique({
+            where: { name: 'Gratuito' }
+          });
+
+          if (!freePlan) {
+            logError(new Error('Free plan not found'), 'Webhook - Find Free Plan');
           } else {
-            console.log('✅ Free plan found:', freePlan.name, '(ID:', freePlan.id, ')');
-            
             // Atualizar usuário para plano gratuito
-            const { data: updatedUser, error: cancelError } = await supabase
-              .from('users')
-              .update({
-                subscription_plan_id: freePlan.id,
-                subscription_status: 'cancelled',
-                subscription_expires_at: null,
-                stripe_subscription_id: null,
-                updated_at: new Date().toISOString()
-              })
-              .eq('stripe_subscription_id', subscription.id)
-              .select('id, email, subscription_status, subscription_plan_id');
-            
-            if (cancelError) {
-              console.error('❌ Error cancelling subscription:', cancelError);
-            } else {
-              console.log('✅ Subscription cancelled successfully');
-              console.log('Updated user:', updatedUser);
-            }
+            await prisma.user.updateMany({
+              where: { stripeSubscriptionId: subscription.id },
+              data: {
+                subscriptionPlanId: freePlan.id,
+                subscriptionStatus: 'cancelled',
+                subscriptionExpiresAt: null,
+                stripeSubscriptionId: null,
+              }
+            });
           }
-        } else if (subscription.cancel_at_period_end && (subscription as any).current_period_end) {
-          console.log('⏳ Subscription will be cancelled at period end:', new Date((subscription as any).current_period_end * 1000).toISOString());
-          console.log('User can continue using until then');
-        } else {
-          console.log('ℹ️ Subscription updated but not cancelled (status:', subscription.status, ')');
         }
         break;
 
       case 'billing_portal.session.created':
-        console.log('\n--- BILLING PORTAL SESSION CREATED ---');
-        console.log('Portal session created successfully');
         break;
-      
+
       default:
-        console.log('\n--- UNHANDLED EVENT ---');
-        console.log('Event type not handled:', event.type);
+        break;
     }
 
-    console.log('\n=== WEBHOOK PROCESSED SUCCESSFULLY ===\n');
     res.json({ received: true });
   } catch (error: any) {
-    console.error('\n❌ WEBHOOK ERROR:', error.message);
-    console.error('Stack:', error.stack);
-    res.status(500).json({ error: error.message });
+    logError(error, 'Webhook Processing');
+    res.status(500).json({ error: sanitizeError(error) });
   }
 });
 
 // Cancelar assinatura
 router.post('/cancel-subscription', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
-    const supabase = getSupabase();
     const stripe = getStripe();
 
-    console.log('\n=== MANUAL SUBSCRIPTION CANCELLATION ===');
-    console.log('User ID:', req.user!.id);
-
     // Buscar dados do usuário
-    const { data: user, error: userError } = await supabase
-      .from('users')
-      .select('stripe_subscription_id, email')
-      .eq('id', req.user!.id)
-      .single();
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.id },
+      select: { stripeSubscriptionId: true, email: true }
+    });
 
-    if (userError || !user || !user.stripe_subscription_id) {
-      console.error('❌ Subscription not found for user');
+    if (!user || !user.stripeSubscriptionId) {
       return res.status(404).json({ error: 'Assinatura não encontrada' });
     }
 
-    console.log('User email:', user.email);
-    console.log('Stripe subscription ID:', user.stripe_subscription_id);
-
     // Cancelar no Stripe imediatamente (sem esperar fim do período)
-    const cancelledSubscription = await stripe.subscriptions.cancel(user.stripe_subscription_id);
-    console.log('✅ Subscription cancelled in Stripe');
-    console.log('Cancellation status:', cancelledSubscription.status);
-    console.log('Canceled at:', cancelledSubscription.canceled_at ? new Date(cancelledSubscription.canceled_at * 1000).toISOString() : 'N/A');
+    const cancelledSubscription = await stripe.subscriptions.cancel(user.stripeSubscriptionId);
 
     // O webhook irá processar o cancelamento e atualizar o banco
-    res.json({ 
+    res.json({
       message: 'Assinatura cancelada com sucesso',
       status: cancelledSubscription.status
     });
   } catch (error: any) {
-    console.error('❌ Error cancelling subscription:', error.message);
-    res.status(500).json({ error: error.message });
+    logError(error, 'Cancel Subscription');
+    res.status(500).json({ error: sanitizeError(error) });
   }
 });
 
 // Criar sessão do portal do cliente
 router.post('/create-portal-session', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
-    const supabase = getSupabase();
     const stripe = getStripe();
 
     // Buscar dados do usuário
-    const { data: user, error: userError } = await supabase
-      .from('users')
-      .select('stripe_customer_id')
-      .eq('id', req.user!.id)
-      .single();
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.id },
+      select: { stripeCustomerId: true }
+    });
 
-    if (userError || !user || !user.stripe_customer_id) {
+    if (!user || !user.stripeCustomerId) {
       return res.status(404).json({ error: 'Cliente não encontrado' });
     }
 
     // Criar sessão do portal
     const portalSession = await stripe.billingPortal.sessions.create({
-      customer: user.stripe_customer_id,
+      customer: user.stripeCustomerId,
       return_url: `${process.env.FRONTEND_URL}/dashboard`,
     });
 
     res.json({ url: portalSession.url });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    logError(error, 'Create Portal Session');
+    res.status(500).json({ error: sanitizeError(error) });
   }
 });
 
 // Verificar status da assinatura
 router.get('/subscription-status', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
-    const supabase = getSupabase();
-    
-    console.log('\n=== CHECKING SUBSCRIPTION STATUS ===');
-    console.log('User ID:', req.user!.id);
-    
-    // Primeiro, verificar e atualizar assinaturas expiradas
-    await supabase.rpc('check_expired_subscriptions');
-    
-    const { data: user, error } = await supabase
-      .from('users')
-      .select('subscription_plan_id, subscription_status, subscription_expires_at, subscription_plans(*)')
-      .eq('id', req.user!.id)
-      .single();
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.id },
+      select: {
+        subscriptionPlanId: true,
+        subscriptionStatus: true,
+        subscriptionExpiresAt: true,
+        subscriptionPlan: true
+      }
+    });
 
-    if (error) throw error;
-    
+    if (!user) {
+      return res.status(404).json({ error: 'Usuário não encontrado' });
+    }
+
     // Verificar manualmente se expirou (fallback)
-    if (user.subscription_expires_at && new Date(user.subscription_expires_at) < new Date() && user.subscription_status === 'active') {
-      console.log('⚠️ Subscription expired, updating to free plan...');
-      
-      const { data: freePlan } = await supabase
-        .from('subscription_plans')
-        .select('id')
-        .eq('name', 'Gratuito')
-        .single();
-      
+    if (user.subscriptionExpiresAt && new Date(user.subscriptionExpiresAt) < new Date() && user.subscriptionStatus === 'active') {
+      const freePlan = await prisma.subscriptionPlan.findUnique({
+        where: { name: 'Gratuito' }
+      });
+
       if (freePlan) {
-        const { error: updateError } = await supabase
-          .from('users')
-          .update({
-            subscription_plan_id: freePlan.id,
-            subscription_status: 'expired',
-            subscription_expires_at: null
-          })
-          .eq('id', req.user!.id);
-        
-        if (updateError) {
-          console.error('❌ Error updating user:', updateError);
-          // Retornar dados atuais mesmo com erro
-          return res.json({
-            planId: user.subscription_plan_id,
-            status: user.subscription_status,
-            expiresAt: user.subscription_expires_at,
-            plan: user.subscription_plans || null,
-            error: 'Failed to downgrade: ' + updateError.message
+        try {
+          await prisma.user.update({
+            where: { id: req.user!.id },
+            data: {
+              subscriptionPlanId: freePlan.id,
+              subscriptionStatus: 'expired',
+              subscriptionExpiresAt: null
+            }
           });
-        }
-        
-        // Buscar dados atualizados
-        const { data: updatedUser } = await supabase
-          .from('users')
-          .select('subscription_plan_id, subscription_status, subscription_expires_at, subscription_plans(*)')
-          .eq('id', req.user!.id)
-          .single();
-        
-        if (updatedUser) {
-          console.log('✅ User downgraded to free plan');
+
+          // Buscar dados atualizados
+          const updatedUser = await prisma.user.findUnique({
+            where: { id: req.user!.id },
+            select: {
+              subscriptionPlanId: true,
+              subscriptionStatus: true,
+              subscriptionExpiresAt: true,
+              subscriptionPlan: true
+            }
+          });
+
+          if (updatedUser) {
+            return res.json({
+              planId: updatedUser.subscriptionPlanId,
+              status: updatedUser.subscriptionStatus,
+              expiresAt: updatedUser.subscriptionExpiresAt,
+              plan: updatedUser.subscriptionPlan || null
+            });
+          }
+        } catch (updateError) {
+          logError(updateError, 'Subscription Status - Update Expired');
           return res.json({
-            planId: updatedUser.subscription_plan_id,
-            status: updatedUser.subscription_status,
-            expiresAt: updatedUser.subscription_expires_at,
-            plan: updatedUser.subscription_plans || null
+            planId: user.subscriptionPlanId,
+            status: user.subscriptionStatus,
+            expiresAt: user.subscriptionExpiresAt,
+            plan: user.subscriptionPlan || null,
+            error: 'Failed to downgrade'
           });
         }
       }
     }
-    
-    console.log('Plan:', (user.subscription_plans as any)?.name || 'N/A');
-    console.log('Status:', user.subscription_status);
-    console.log('Expires at:', user.subscription_expires_at || 'N/A');
-    
+
     res.json({
-      planId: user.subscription_plan_id,
-      status: user.subscription_status,
-      expiresAt: user.subscription_expires_at,
-      plan: user.subscription_plans || null
+      planId: user.subscriptionPlanId,
+      status: user.subscriptionStatus,
+      expiresAt: user.subscriptionExpiresAt,
+      plan: user.subscriptionPlan || null
     });
   } catch (error: any) {
-    console.error('❌ Error checking subscription status:', error.message);
-    res.status(500).json({ error: error.message });
+    logError(error, 'Subscription Status');
+    res.status(500).json({ error: sanitizeError(error) });
   }
 });
 
 // Atualizar dados do usuário (forçar refresh)
 router.post('/refresh-user', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
-    const supabase = getSupabase();
-    
-    const { data: user, error } = await supabase
-      .from('users')
-      .select('*, subscription_plans(*)')
-      .eq('id', req.user!.id)
-      .single();
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.id },
+      include: { subscriptionPlan: true }
+    });
 
-    if (error) throw error;
-    
+    if (!user) {
+      return res.status(404).json({ error: 'Usuário não encontrado' });
+    }
+
     res.json(user);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    logError(error, 'Refresh User');
+    res.status(500).json({ error: sanitizeError(error) });
   }
 });
 
 // Forçar aplicação de limitações do plano
 router.post('/force-plan-limits', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
-    const supabase = getSupabase();
-    
-    // Executar função para forçar aplicação de limitações
-    const { data, error } = await supabase
-      .rpc('force_apply_plan_limits', { target_user_id: req.user!.id });
-    
-    if (error) throw error;
-    
     // Buscar dados atualizados do usuário
-    const { data: user, error: userError } = await supabase
-      .from('users')
-      .select('*, subscription_plans(*)')
-      .eq('id', req.user!.id)
-      .single();
-    
-    if (userError) throw userError;
-    
-    res.json({ 
-      message: data || 'Limitações aplicadas com sucesso',
-      user 
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.id },
+      include: { subscriptionPlan: true }
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'Usuário não encontrado' });
+    }
+
+    res.json({
+      message: 'Limitações aplicadas com sucesso',
+      user
     });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    logError(error, 'Force Plan Limits');
+    res.status(500).json({ error: sanitizeError(error) });
   }
 });
 

@@ -4,6 +4,7 @@ const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const geminiService_1 = require("../services/geminiService");
 const zod_1 = require("zod");
+const errorHandler_1 = require("../utils/errorHandler");
 const router = (0, express_1.Router)();
 const generateMessageSchema = zod_1.z.object({
     context: zod_1.z.string().min(1).max(500),
@@ -23,7 +24,8 @@ router.post('/generate-message', auth_1.authMiddleware, async (req, res) => {
                 details: error.issues.map((e) => e.message)
             });
         }
-        res.status(500).json({ error: error.message || 'Erro ao gerar mensagem' });
+        (0, errorHandler_1.logError)(error, 'Generate Message');
+        res.status(500).json({ error: (0, errorHandler_1.sanitizeError)(error) });
     }
 });
 exports.default = router;
