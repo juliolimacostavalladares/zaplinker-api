@@ -1,14 +1,11 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { createClient } from '@supabase/supabase-js';
 import { z } from 'zod';
+import { sanitizeString, validateAndSanitizeEmail } from '../utils/sanitize';
+import { prisma } from '../lib/prisma';
 
 const router = Router();
-const getSupabase = () => createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_KEY!
-);
 
 // Schemas de validação
 const registerSchema = z.object({
@@ -32,53 +29,69 @@ router.post('/register', async (req: Request, res: Response) => {
   try {
     // Validar input
     const validated = registerSchema.parse(req.body);
-    const { email, password, name } = validated;
+    const { password, name } = validated;
+
+    // Sanitizar e validar email
+    const email = validateAndSanitizeEmail(validated.email);
+    if (!email) {
+      return res.status(400).json({ error: 'Email inválido' });
+    }
+
+    // Sanitizar nome
+    const sanitizedName = sanitizeString(name, 100);
 
     // Verificar se usuário já existe
-    const supabase = getSupabase();
-    const { data: existingUser } = await supabase
-      .from('users')
-      .select('id')
-      .eq('email', email)
-      .single();
+    const existingUser = await prisma.user.findUnique({
+      where: { email }
+    });
 
     if (existingUser) {
       return res.status(400).json({ error: 'Email já cadastrado' });
     }
 
-    // Hash da senha
-    const passwordHash = await bcrypt.hash(password, 10);
+    // Hash da senha com 12 rounds
+    const passwordHash = await bcrypt.hash(password, 12);
 
     // Buscar plano gratuito
-    const { data: freePlan } = await supabase
-      .from('subscription_plans')
-      .select('id')
-      .eq('name', 'Gratuito')
-      .single();
+    const freePlan = await prisma.subscriptionPlan.findUnique({
+      where: { name: 'Gratuito' }
+    });
 
     // Criar usuário
-    const { data: user, error } = await supabase
-      .from('users')
-      .insert([{
+    const user = await prisma.user.create({
+      data: {
         email,
-        password_hash: passwordHash,
-        name,
-        subscription_plan_id: freePlan?.id
-      }])
-      .select('id, email, name, subscription_plan_id, subscription_status, created_at')
-      .single();
-
-    if (error) throw error;
+        passwordHash,
+        name: sanitizedName,
+        subscriptionPlanId: freePlan?.id
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        subscriptionPlanId: true,
+        subscriptionStatus: true,
+        createdAt: true
+      }
+    });
 
     // Gerar token
     const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET!, { expiresIn: '7d' });
 
-    res.status(201).json({ user, token });
+    // Enviar token via httpOnly cookie
+    res.cookie('auth-token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 dias
+    });
+
+    res.status(201).json({ user });
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-      return res.status(400).json({ 
-        error: 'Dados inválidos', 
-        details: error.errors.map(e => e.message) 
+      return res.status(400).json({
+        error: 'Dados inválidos',
+        details: error.issues.map((e: any) => e.message)
       });
     }
     res.status(500).json({ error: error.message });
@@ -90,22 +103,25 @@ router.post('/login', async (req: Request, res: Response) => {
   try {
     // Validar input
     const validated = loginSchema.parse(req.body);
-    const { email, password } = validated;
+    const { password } = validated;
+
+    // Sanitizar e validar email
+    const email = validateAndSanitizeEmail(validated.email);
+    if (!email) {
+      return res.status(401).json({ error: 'Credenciais inválidas' });
+    }
 
     // Buscar usuário
-    const supabase = getSupabase();
-    const { data: user, error } = await supabase
-      .from('users')
-      .select('*')
-      .eq('email', email)
-      .single();
+    const user = await prisma.user.findUnique({
+      where: { email }
+    });
 
-    if (error || !user) {
+    if (!user) {
       return res.status(401).json({ error: 'Credenciais inválidas' });
     }
 
     // Verificar senha
-    const isValidPassword = await bcrypt.compare(password, user.password_hash);
+    const isValidPassword = await bcrypt.compare(password, user.passwordHash);
     if (!isValidPassword) {
       return res.status(401).json({ error: 'Credenciais inválidas' });
     }
@@ -114,14 +130,22 @@ router.post('/login', async (req: Request, res: Response) => {
     const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET!, { expiresIn: '7d' });
 
     // Remover hash da senha da resposta
-    const { password_hash, ...userWithoutPassword } = user;
+    const { passwordHash, ...userWithoutPassword } = user;
 
-    res.json({ user: userWithoutPassword, token });
+    // Enviar token via httpOnly cookie
+    res.cookie('auth-token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 dias
+    });
+
+    res.json({ user: userWithoutPassword });
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-      return res.status(400).json({ 
-        error: 'Dados inválidos', 
-        details: error.errors.map(e => e.message) 
+      return res.status(400).json({
+        error: 'Dados inválidos',
+        details: error.issues.map((e: any) => e.message)
       });
     }
     res.status(500).json({ error: error.message });

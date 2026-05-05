@@ -38,7 +38,7 @@ export const createLinkSchema = z.object({
   
   type: z.enum(['direct', 'bio'], {
     errorMap: () => ({ message: 'Tipo deve ser "direct" ou "bio"' })
-  }),
+  } as any),
   
   defaultMessage: z.string().max(500, 'Mensagem muito longa').optional(),
   
@@ -78,7 +78,7 @@ export const validate = (schema: z.ZodSchema) => {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
           error: 'Dados inválidos',
-          details: error.errors.map(e => ({
+          details: error.issues.map(e => ({
             field: e.path.join('.'),
             message: e.message
           }))
