@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
 import { AuthRequest } from '../types';
-import { authMiddleware } from '../auth';
+import { authMiddleware } from '../middleware/auth';
 
 const router = Router();
 
