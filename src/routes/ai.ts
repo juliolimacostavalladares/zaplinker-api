@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { AuthRequest } from '../types';
 import { authMiddleware } from '../middleware/auth';
+import { checkFeatureAccess } from '../middleware/featureAccess';
 import { generateWhatsAppMessage } from '../services/geminiService';
 import { z } from 'zod';
 import { sanitizeError, logError } from '../utils/errorHandler';
@@ -12,7 +13,7 @@ const generateMessageSchema = z.object({
   tone: z.enum(['friendly', 'professional', 'casual', 'formal']).optional().default('friendly')
 });
 
-router.post('/generate-message', authMiddleware, async (req: AuthRequest, res: Response) => {
+router.post('/generate-message', authMiddleware, checkFeatureAccess('ai_gemini'), async (req: AuthRequest, res: Response) => {
   try {
     const validated = generateMessageSchema.parse(req.body);
     const { context, tone } = validated;
