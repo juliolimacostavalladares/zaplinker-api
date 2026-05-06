@@ -9,6 +9,7 @@ import profileRoutes from "./routes/profile";
 import paymentsRoutes from "./routes/payments";
 import aiRoutes from "./routes/ai";
 import logoutRoutes from "./routes/logout";
+import analyticsRoutes from "./routes/analytics";
 import { authMiddleware } from "./middleware/auth";
 import { checkPlanLimits } from "./middleware/planLimits";
 import { AuthRequest } from "./types";
@@ -80,6 +81,7 @@ app.use("/api/subscription", subscriptionRoutes);
 app.use("/api/profile", profileRoutes);
 app.use("/api/payments", paymentsRoutes);
 app.use("/api/ai", aiRoutes);
+app.use("/api/analytics", analyticsRoutes);
 
 // Endpoint para obter token CSRF
 app.get("/api/csrf-token", (req, res) => {
