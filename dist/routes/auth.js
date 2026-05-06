@@ -10,6 +10,7 @@ const zod_1 = require("zod");
 const sanitize_1 = require("../utils/sanitize");
 const prisma_1 = require("../lib/prisma");
 const errorHandler_1 = require("../utils/errorHandler");
+const subscriptionService_1 = require("../services/subscriptionService");
 const router = (0, express_1.Router)();
 // Schemas de validação
 const registerSchema = zod_1.z.object({
@@ -49,9 +50,7 @@ router.post('/register', async (req, res) => {
         // Hash da senha com 12 rounds
         const passwordHash = await bcryptjs_1.default.hash(password, 12);
         // Buscar plano gratuito
-        const freePlan = await prisma_1.prisma.subscriptionPlan.findUnique({
-            where: { name: 'Gratuito' }
-        });
+        const freePlan = await subscriptionService_1.subscriptionService.getFreePlan();
         // Criar usuário
         const user = await prisma_1.prisma.user.create({
             data: {
@@ -70,6 +69,9 @@ router.post('/register', async (req, res) => {
             }
         });
         // Gerar token
+        if (!process.env.JWT_SECRET) {
+            throw new Error('JWT_SECRET not configured');
+        }
         const token = jsonwebtoken_1.default.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
         // Enviar token via httpOnly cookie
         res.cookie('auth-token', token, {
@@ -115,6 +117,9 @@ router.post('/login', async (req, res) => {
             return res.status(401).json({ error: 'Credenciais inválidas' });
         }
         // Gerar token
+        if (!process.env.JWT_SECRET) {
+            throw new Error('JWT_SECRET not configured');
+        }
         const token = jsonwebtoken_1.default.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
         // Remover hash da senha da resposta
         const { passwordHash, ...userWithoutPassword } = user;

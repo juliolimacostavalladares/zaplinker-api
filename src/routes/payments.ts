@@ -4,6 +4,7 @@ import { AuthRequest } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { sanitizeError, logError } from '../utils/errorHandler';
 import { prisma } from '../lib/prisma';
+import { subscriptionService } from '../services/subscriptionService';
 
 const router = Router();
 
@@ -176,9 +177,7 @@ router.post('/webhook', async (req, res: Response) => {
 
         if (isCancelled) {
           // Buscar plano gratuito
-          const freePlan = await prisma.subscriptionPlan.findUnique({
-            where: { name: 'Gratuito' }
-          });
+          const freePlan = await subscriptionService.getFreePlan();
 
           if (!freePlan) {
             logError(new Error('Free plan not found'), 'Webhook - Find Free Plan');
@@ -286,51 +285,25 @@ router.get('/subscription-status', authMiddleware, async (req: AuthRequest, res:
     }
 
     // Verificar manualmente se expirou (fallback)
-    if (user.subscriptionExpiresAt && new Date(user.subscriptionExpiresAt) < new Date() && user.subscriptionStatus === 'active') {
-      const freePlan = await prisma.subscriptionPlan.findUnique({
-        where: { name: 'Gratuito' }
-      });
+    if (subscriptionService.isSubscriptionExpired(user.subscriptionExpiresAt, user.subscriptionStatus)) {
+      try {
+        const updatedUser = await subscriptionService.downgradeToFreePlan(req.user!.id);
 
-      if (freePlan) {
-        try {
-          await prisma.user.update({
-            where: { id: req.user!.id },
-            data: {
-              subscriptionPlanId: freePlan.id,
-              subscriptionStatus: 'expired',
-              subscriptionExpiresAt: null
-            }
-          });
-
-          // Buscar dados atualizados
-          const updatedUser = await prisma.user.findUnique({
-            where: { id: req.user!.id },
-            select: {
-              subscriptionPlanId: true,
-              subscriptionStatus: true,
-              subscriptionExpiresAt: true,
-              subscriptionPlan: true
-            }
-          });
-
-          if (updatedUser) {
-            return res.json({
-              planId: updatedUser.subscriptionPlanId,
-              status: updatedUser.subscriptionStatus,
-              expiresAt: updatedUser.subscriptionExpiresAt,
-              plan: updatedUser.subscriptionPlan || null
-            });
-          }
-        } catch (updateError) {
-          logError(updateError, 'Subscription Status - Update Expired');
-          return res.json({
-            planId: user.subscriptionPlanId,
-            status: user.subscriptionStatus,
-            expiresAt: user.subscriptionExpiresAt,
-            plan: user.subscriptionPlan || null,
-            error: 'Failed to downgrade'
-          });
-        }
+        return res.json({
+          planId: updatedUser.subscriptionPlanId,
+          status: updatedUser.subscriptionStatus,
+          expiresAt: updatedUser.subscriptionExpiresAt,
+          plan: updatedUser.subscriptionPlan || null
+        });
+      } catch (updateError) {
+        logError(updateError, 'Subscription Status - Update Expired');
+        return res.json({
+          planId: user.subscriptionPlanId,
+          status: user.subscriptionStatus,
+          expiresAt: user.subscriptionExpiresAt,
+          plan: user.subscriptionPlan || null,
+          error: 'Failed to downgrade'
+        });
       }
     }
 

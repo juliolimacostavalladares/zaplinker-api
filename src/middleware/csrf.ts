@@ -1,9 +1,13 @@
 import { doubleCsrf } from 'csrf-csrf';
 import cookieParser from 'cookie-parser';
 
-const csrfSecret = process.env.CSRF_SECRET || 'default-csrf-secret-change-in-production';
+const csrfSecret = process.env.CSRF_SECRET;
 
-// Validar que o secret tem o tamanho correto
+// Validar que o secret existe e tem o tamanho correto
+if (!csrfSecret) {
+  throw new Error('CSRF_SECRET environment variable is required');
+}
+
 if (csrfSecret.length < 32) {
   throw new Error('CSRF_SECRET must be at least 32 characters long');
 }

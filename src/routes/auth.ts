@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { sanitizeString, validateAndSanitizeEmail } from '../utils/sanitize';
 import { prisma } from '../lib/prisma';
 import { sanitizeError, logError } from '../utils/errorHandler';
+import { subscriptionService } from '../services/subscriptionService';
 
 const router = Router();
 
@@ -54,9 +55,7 @@ router.post('/register', async (req: Request, res: Response) => {
     const passwordHash = await bcrypt.hash(password, 12);
 
     // Buscar plano gratuito
-    const freePlan = await prisma.subscriptionPlan.findUnique({
-      where: { name: 'Gratuito' }
-    });
+    const freePlan = await subscriptionService.getFreePlan();
 
     // Criar usuário
     const user = await prisma.user.create({
@@ -77,7 +76,10 @@ router.post('/register', async (req: Request, res: Response) => {
     });
 
     // Gerar token
-    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET!, { expiresIn: '7d' });
+    if (!process.env.JWT_SECRET) {
+      throw new Error('JWT_SECRET not configured');
+    }
+    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
     // Enviar token via httpOnly cookie
     res.cookie('auth-token', token, {
@@ -129,7 +131,10 @@ router.post('/login', async (req: Request, res: Response) => {
     }
 
     // Gerar token
-    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET!, { expiresIn: '7d' });
+    if (!process.env.JWT_SECRET) {
+      throw new Error('JWT_SECRET not configured');
+    }
+    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
     // Remover hash da senha da resposta
     const { passwordHash, ...userWithoutPassword } = user;

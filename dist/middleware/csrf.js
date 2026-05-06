@@ -7,8 +7,11 @@ exports.generateToken = exports.doubleCsrfProtection = exports.cookieParser = vo
 const csrf_csrf_1 = require("csrf-csrf");
 const cookie_parser_1 = __importDefault(require("cookie-parser"));
 exports.cookieParser = cookie_parser_1.default;
-const csrfSecret = process.env.CSRF_SECRET || 'default-csrf-secret-change-in-production';
-// Validar que o secret tem o tamanho correto
+const csrfSecret = process.env.CSRF_SECRET;
+// Validar que o secret existe e tem o tamanho correto
+if (!csrfSecret) {
+    throw new Error('CSRF_SECRET environment variable is required');
+}
 if (csrfSecret.length < 32) {
     throw new Error('CSRF_SECRET must be at least 32 characters long');
 }
