@@ -7,19 +7,7 @@ type FeatureName = 'ai_gemini' | 'qr_code' | 'analytics' | 'custom_domain';
 export const checkFeatureAccess = (feature: FeatureName) => {
   return async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-      const user = await prisma.user.findUnique({
-        where: { id: req.user!.id },
-        include: {
-          subscriptionPlan: {
-            select: { features: true, name: true }
-          }
-        }
-      });
-
-      if (!user) {
-        return res.status(404).json({ error: 'Usuário não encontrado' });
-      }
-
+      const user = req.user!;
       const features = user.subscriptionPlan?.features as any;
       const hasFeature = features?.[feature] === true;
 
