@@ -16,6 +16,7 @@ export interface User {
   name: string;
   password_hash: string;
   subscription_plan_id?: string;
+  subscriptionPlan?: SubscriptionPlan;
   subscription_status: 'active' | 'expired' | 'cancelled';
   subscription_expires_at?: string;
   created_at: string;

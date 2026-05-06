@@ -1,6 +1,5 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../types';
-import { prisma } from '../lib/prisma';
 
 type FeatureName = 'ai_gemini' | 'qr_code' | 'analytics' | 'custom_domain';
 
@@ -8,7 +7,11 @@ export const checkFeatureAccess = (feature: FeatureName) => {
   return async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const user = req.user!;
-      const features = user.subscriptionPlan?.features as any;
+
+      // Use subscriptionPlan already loaded by authMiddleware
+      const subscriptionPlan = user.subscriptionPlan;
+
+      const features = subscriptionPlan?.features as any;
       const hasFeature = features?.[feature] === true;
 
       if (!hasFeature) {
@@ -17,7 +20,7 @@ export const checkFeatureAccess = (feature: FeatureName) => {
           code: 'FEATURE_UNAVAILABLE',
           details: {
             feature,
-            plan: user.subscriptionPlan?.name || 'free'
+            plan: subscriptionPlan?.name || 'free'
           }
         });
       }
